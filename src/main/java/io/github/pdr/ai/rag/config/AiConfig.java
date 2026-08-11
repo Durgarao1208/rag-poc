@@ -12,9 +12,9 @@ public class AiConfig {
     @Bean
     public TokenTextSplitter tokenTextSplitter() {
         return TokenTextSplitter.builder()
-                .withChunkSize(800)
-                .withMinChunkSizeChars(350)
-                .withMinChunkLengthToEmbed(100)
+                .withChunkSize(300)
+                .withMinChunkSizeChars(150)
+                .withMinChunkLengthToEmbed(50)
                 .withMaxNumChunks(10000)
                 .withKeepSeparator(true)
                 .withPunctuationMarks(List.of('.','?','!','\n'))

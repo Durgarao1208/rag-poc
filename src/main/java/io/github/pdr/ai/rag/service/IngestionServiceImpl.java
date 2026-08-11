@@ -1,74 +1,79 @@
 package io.github.pdr.ai.rag.service;
 
+import io.github.pdr.ai.rag.parser.FileParser;
+import io.github.pdr.ai.rag.splitter.ChunkingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.tika.metadata.Metadata;
-import org.apache.tika.parser.AutoDetectParser;
-import org.apache.tika.parser.ParseContext;
-import org.apache.tika.sax.BodyContentHandler;
-import org.springframework.ai.transformer.splitter.TokenTextSplitter;
+import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
-import java.io.InputStream;
-import java.time.Instant;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-
-import org.springframework.ai.document.Document;
+import java.util.Objects;
 
 @Service
 @Slf4j
 @RequiredArgsConstructor
 public class IngestionServiceImpl implements IngestionService{
 
-    private final TokenTextSplitter textSplitter;
+    private final FileParser apacheTikaParser;
+    private final ChunkingService chunkingService;
+    private final VectorStore vectorStore;
+    private final EmbeddingModel embeddingModel;
 
     @Override
     public void ingest(MultipartFile file) {
         log.info("Started ingestion for file: {}", file.getOriginalFilename());
 
-        Metadata metadata = new Metadata();
+        List<Document> document = apacheTikaParser.parse(file);
+        List<Document> chunks = chunkingService.chunk(document);
 
-        String content;
+        chunks.forEach(this::embedingModelCheck);
 
-        try(InputStream is = file.getInputStream()) {
+        // Step 4: Store
+//        vectorStore.add(chunks);
 
-            AutoDetectParser parser = new AutoDetectParser();
-            BodyContentHandler handler = new BodyContentHandler(-1);
-            ParseContext context = new ParseContext();
+        log.info("Ingested file={} chunks={}",file.getOriginalFilename(),chunks.size());
+    }
 
-            parser.parse(
-                    is,
-                    handler,
-                    metadata,
-                    context
+    private void enrichMetadata(
+            List<Document> chunks,
+            MultipartFile file) {
+
+        int chunkNumber = 1;
+
+        for (Document chunk : chunks) {
+
+            chunk.getMetadata().put(
+                    "fileName",
+                    Objects.requireNonNull(file.getOriginalFilename())
             );
 
-            content = handler.toString();
+            chunk.getMetadata().put(
+                    "contentType",
+                    Objects.requireNonNull(file.getContentType())
+            );
 
-            if (content == null || content.isBlank()) {
-                throw new RuntimeException("No text extracted from file");
-            }
-
-            Map<String, Object> documentMetadata = new HashMap<>();
-            documentMetadata.put("fileName", file.getOriginalFilename());
-            documentMetadata.put("contentType", file.getContentType());
-            documentMetadata.put("detectedType",metadata.get(Metadata.CONTENT_TYPE));
-            documentMetadata.put("ingestedAt",Instant.now().toString());
-
-            Document document = new Document(content, documentMetadata);
-            List<Document> chunks = textSplitter.split(document);
-
-            log.info("Ingested file={} chunks={}",file.getOriginalFilename(),chunks.size());
-
-        } catch (Exception ex) {
-            log.error("Failed to ingest document {}", file.getOriginalFilename(), ex);
-
-            throw new RuntimeException(
-                    "Failed to ingest document: " + file.getOriginalFilename(),
-                    ex
+            chunk.getMetadata().put(
+                    "chunkNumber",
+                    chunkNumber++
             );
         }
+    }
+
+    private void embedingModelCheck(Document document) {
+        if (document.getText() == null) return;
+
+        log.info("chunk size {}", document.getText().length());
+//        log.info("---------------------chunk content begin ---------------/n");
+//        log.info(document.getText());
+//        log.info("---------------------chunk content end ---------------/n");
+
+
+        long start = System.currentTimeMillis();
+        embeddingModel.embed(document.getText());
+
+        log.info("{} embedding took {} ms", document.getMetadata().get("chunk_index"), (System.currentTimeMillis() - start));
     }
 }
